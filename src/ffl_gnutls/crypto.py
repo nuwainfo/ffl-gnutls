@@ -76,6 +76,15 @@ class CryptoEngine:
             
         return native.randomBytes(length)
 
+    def generateSelfSignedCertificate(self, commonName):
+        if not isinstance(commonName, str):
+            raise TypeError("commonName must be a string")
+
+        certificatePEM, privateKeyPEM = (
+            native.generateSelfSignedCertificate(commonName)
+        )
+        return certificatePEM.decode("ascii"), privateKeyPEM.decode("ascii")
+
     def generateP384KeyPair(self):
         return native.generateP384KeyPair()
 

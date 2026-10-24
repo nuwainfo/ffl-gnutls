@@ -23,6 +23,7 @@ limitations under the License.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <gnutls/abstract.h>
 #include <gnutls/crypto.h>
@@ -32,6 +33,9 @@ limitations under the License.
 #define FFL_GNUTLS_MIN_VERSION "3.8.4"
 #define FFL_GNUTLS_P384_BITS 384
 #define FFL_GNUTLS_P384_BYTES 48
+#define FFL_GNUTLS_CERTIFICATE_SERIAL_SIZE 20
+#define FFL_GNUTLS_CERTIFICATE_CLOCK_SKEW_SECONDS (5 * 60)
+#define FFL_GNUTLS_CERTIFICATE_VALIDITY_SECONDS (365 * 24 * 60 * 60)
 #define FFL_GNUTLS_GCM_TAG_SIZE 16
 #define FFL_GNUTLS_AES_BLOCK_SIZE 16
 
@@ -43,6 +47,11 @@ static void fflGnuTLSInitializeBuffer(FFLGnuTLSBuffer *buffer) {
 static void fflGnuTLSInitializeKeyPair(FFLGnuTLSKeyPair *keyPair) {
     fflGnuTLSInitializeBuffer(&keyPair->privateKey);
     fflGnuTLSInitializeBuffer(&keyPair->publicKey);
+}
+
+static void fflGnuTLSInitializeSelfSignedCertificate(FFLGnuTLSSelfSignedCertificate *certificate) {
+    fflGnuTLSInitializeBuffer(&certificate->certificate);
+    fflGnuTLSInitializeBuffer(&certificate->privateKey);
 }
 
 static int fflGnuTLSAllocateBuffer(size_t size, FFLGnuTLSBuffer *output) {
@@ -330,6 +339,14 @@ void fflGnuTLSKeyPairFree(FFLGnuTLSKeyPair *keyPair) {
     fflGnuTLSBufferFree(&keyPair->publicKey);
 }
 
+void fflGnuTLSSelfSignedCertificateFree(FFLGnuTLSSelfSignedCertificate *certificate) {
+    if (certificate == NULL)
+        return;
+
+    fflGnuTLSBufferFree(&certificate->certificate);
+    fflGnuTLSBufferFree(&certificate->privateKey);
+}
+
 int fflGnuTLSRandomBytes(size_t length, FFLGnuTLSBuffer *output) {
     int result;
     if (output == NULL || length == 0) 
@@ -345,6 +362,140 @@ int fflGnuTLSRandomBytes(size_t length, FFLGnuTLSBuffer *output) {
     if (result < 0) 
         fflGnuTLSBufferFree(output);
     
+    return result;
+}
+
+int fflGnuTLSGenerateSelfSignedCertificate(const unsigned char *commonName, size_t commonNameSize, FFLGnuTLSSelfSignedCertificate *output) {
+    gnutls_x509_privkey_t privateKey = NULL;
+    gnutls_x509_crt_t certificate = NULL;
+    gnutls_datum_t privateKeyPEM = {NULL, 0};
+    gnutls_datum_t certificatePEM = {NULL, 0};
+    unsigned char serial[FFL_GNUTLS_CERTIFICATE_SERIAL_SIZE];
+    time_t now;
+    int result;
+
+    if (commonName == NULL || commonNameSize == 0 || commonNameSize > UINT_MAX || output == NULL)
+        return FFL_GNUTLS_ERROR_INVALID_ARGUMENT;
+
+    fflGnuTLSInitializeSelfSignedCertificate(output);
+    now = time(NULL);
+    if (now == (time_t)-1)
+        return FFL_GNUTLS_ERROR_INVALID_ARGUMENT;
+
+    result = gnutls_x509_privkey_init(&privateKey);
+    if (result >= 0)
+        result = gnutls_x509_privkey_generate(
+            privateKey,
+            GNUTLS_PK_ECDSA,
+            GNUTLS_CURVE_TO_BITS(GNUTLS_ECC_CURVE_SECP256R1),
+            0
+        );
+
+    if (result >= 0)
+        result = gnutls_x509_crt_init(&certificate);
+
+    if (result >= 0)
+        result = gnutls_rnd(GNUTLS_RND_RANDOM, serial, sizeof(serial));
+
+    /* X.509 serial numbers are positive and cryptography limits them to 159 bits. */
+    if (result >= 0) {
+        serial[0] &= 0x7f;
+        serial[0] |= 0x01;
+        result = gnutls_x509_crt_set_version(certificate, 3);
+    }
+
+    if (result >= 0)
+        result = gnutls_x509_crt_set_serial(certificate, serial, sizeof(serial));
+
+    if (result >= 0)
+        result = gnutls_x509_crt_set_activation_time(
+            certificate,
+            now - FFL_GNUTLS_CERTIFICATE_CLOCK_SKEW_SECONDS
+        );
+
+    if (result >= 0)
+        result = gnutls_x509_crt_set_expiration_time(
+            certificate,
+            now + FFL_GNUTLS_CERTIFICATE_VALIDITY_SECONDS
+        );
+
+    if (result >= 0)
+        result = gnutls_x509_crt_set_dn_by_oid(
+            certificate,
+            GNUTLS_OID_X520_COMMON_NAME,
+            0,
+            commonName,
+            (unsigned int)commonNameSize
+        );
+
+    if (result >= 0)
+        result = gnutls_x509_crt_set_issuer_dn_by_oid(
+            certificate,
+            GNUTLS_OID_X520_COMMON_NAME,
+            0,
+            commonName,
+            (unsigned int)commonNameSize
+        );
+
+    if (result >= 0)
+        result = gnutls_x509_crt_set_key(certificate, privateKey);
+
+    if (result >= 0)
+        result = gnutls_x509_crt_sign2(
+            certificate,
+            certificate,
+            privateKey,
+            GNUTLS_DIG_SHA256,
+            0
+        );
+
+    if (result >= 0)
+        result = gnutls_x509_crt_export2(
+            certificate,
+            GNUTLS_X509_FMT_PEM,
+            &certificatePEM
+        );
+
+    if (result >= 0) {
+        result = fflGnuTLSCopyDatum(&certificatePEM, &output->certificate);
+        certificatePEM.data = NULL;
+        certificatePEM.size = 0;
+    }
+
+    if (result >= 0)
+        result = gnutls_x509_privkey_export2_pkcs8(
+            privateKey,
+            GNUTLS_X509_FMT_PEM,
+            NULL,
+            GNUTLS_PKCS_PLAIN,
+            &privateKeyPEM
+        );
+
+    if (result >= 0) {
+        result = fflGnuTLSCopyDatum(&privateKeyPEM, &output->privateKey);
+        privateKeyPEM.data = NULL;
+        privateKeyPEM.size = 0;
+    }
+
+    if (certificatePEM.data != NULL) {
+        gnutls_memset(certificatePEM.data, 0, certificatePEM.size);
+        gnutls_free(certificatePEM.data);
+    }
+
+    if (privateKeyPEM.data != NULL) {
+        gnutls_memset(privateKeyPEM.data, 0, privateKeyPEM.size);
+        gnutls_free(privateKeyPEM.data);
+    }
+
+    if (certificate != NULL)
+        gnutls_x509_crt_deinit(certificate);
+
+    if (privateKey != NULL)
+        gnutls_x509_privkey_deinit(privateKey);
+
+    if (result < 0)
+        fflGnuTLSSelfSignedCertificateFree(output);
+
     return result;
 }
 
@@ -413,7 +564,7 @@ int fflGnuTLSDeriveP384PublicKey(const unsigned char *privateKeyData, size_t pri
         gnutls_pubkey_deinit(publicKey);
     
     if (privateKey != NULL) 
-        nutls_privkey_deinit(privateKey);
+        gnutls_privkey_deinit(privateKey);
     
     return result;
 }

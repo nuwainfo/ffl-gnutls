@@ -126,6 +126,56 @@ static PyObject *pyRandomBytes(PyObject *module, PyObject *args) {
     return fflBuildBytes(&output);
 }
 
+static PyObject *pyGenerateSelfSignedCertificate(
+    PyObject *module,
+    PyObject *args
+) {
+    const char *commonName;
+    Py_ssize_t commonNameSize;
+    FFLGnuTLSSelfSignedCertificate output;
+    PyObject *certificatePEM;
+    PyObject *privateKeyPEM;
+    PyObject *resultTuple;
+    int result;
+
+    if (!PyArg_ParseTuple(args, "s#:generateSelfSignedCertificate", &commonName, &commonNameSize)) {
+        return NULL;
+    }
+    if (commonNameSize <= 0 || memchr(commonName, '\0', (size_t)commonNameSize) != NULL) {
+        PyErr_SetString(PyExc_ValueError, "commonName must be a non-empty string without NUL characters");
+        return NULL;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+    result = fflGnuTLSGenerateSelfSignedCertificate(
+        (const unsigned char *)commonName,
+        (size_t)commonNameSize,
+        &output
+    );
+    Py_END_ALLOW_THREADS
+
+    if (result < 0) {
+        return fflRaiseError(module, "generateSelfSignedCertificate", result);
+    }
+
+    certificatePEM = fflBuildBytes(&output.certificate);
+    if (certificatePEM == NULL) {
+        fflGnuTLSBufferFree(&output.privateKey);
+        return NULL;
+    }
+
+    privateKeyPEM = fflBuildBytes(&output.privateKey);
+    if (privateKeyPEM == NULL) {
+        Py_DECREF(certificatePEM);
+        return NULL;
+    }
+
+    resultTuple = PyTuple_Pack(2, certificatePEM, privateKeyPEM);
+    Py_DECREF(privateKeyPEM);
+    Py_DECREF(certificatePEM);
+    return resultTuple;
+}
+
 static PyObject *pyGenerateP384KeyPair(
     PyObject *module,
     PyObject *Py_UNUSED(args)
@@ -723,6 +773,7 @@ static PyObject *pyDecryptRSAOAEPSHA256(
 static PyMethodDef moduleMethods[] = {
     {"version", pyVersion, METH_NOARGS, NULL},
     {"randomBytes", pyRandomBytes, METH_VARARGS, NULL},
+    {"generateSelfSignedCertificate", pyGenerateSelfSignedCertificate, METH_VARARGS, NULL},
     {"generateP384KeyPair", pyGenerateP384KeyPair, METH_NOARGS, NULL},
     {"deriveP384PublicKey", pyDeriveP384PublicKey, METH_VARARGS, NULL},
     {"signSHA256", pySignSHA256, METH_VARARGS, NULL},

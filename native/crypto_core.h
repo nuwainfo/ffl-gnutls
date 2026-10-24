@@ -36,6 +36,11 @@ typedef struct FFLGnuTLSKeyPair {
     FFLGnuTLSBuffer publicKey;
 } FFLGnuTLSKeyPair;
 
+typedef struct FFLGnuTLSSelfSignedCertificate {
+    FFLGnuTLSBuffer certificate;
+    FFLGnuTLSBuffer privateKey;
+} FFLGnuTLSSelfSignedCertificate;
+
 enum {
     FFL_GNUTLS_ERROR_INVALID_ARGUMENT = -0x7F01,
     FFL_GNUTLS_ERROR_ALLOCATION_FAILED = -0x7F02,
@@ -52,8 +57,10 @@ void fflGnuTLSFormatError(int errorCode, char *buffer, size_t bufferSize);
 
 void fflGnuTLSBufferFree(FFLGnuTLSBuffer *buffer);
 void fflGnuTLSKeyPairFree(FFLGnuTLSKeyPair *keyPair);
+void fflGnuTLSSelfSignedCertificateFree(FFLGnuTLSSelfSignedCertificate *certificate);
 
 int fflGnuTLSRandomBytes(size_t length, FFLGnuTLSBuffer *output);
+int fflGnuTLSGenerateSelfSignedCertificate(const unsigned char *commonName, size_t commonNameSize, FFLGnuTLSSelfSignedCertificate *output);
 int fflGnuTLSGenerateP384KeyPair(FFLGnuTLSKeyPair *output);
 int fflGnuTLSDeriveP384PublicKey(const unsigned char *privateKey, size_t privateKeySize, FFLGnuTLSBuffer *output);
 int fflGnuTLSSignSHA256(const unsigned char *message, size_t messageSize, const unsigned char *privateKey, size_t privateKeySize, FFLGnuTLSBuffer *signature);

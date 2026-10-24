@@ -1,9 +1,33 @@
+import ssl
+import tempfile
+
 import ffl_gnutls
 
 
 def testVersionIsSupported():
     version = tuple(int(part) for part in ffl_gnutls.CryptoEngine().version.split(".")[:3])
     assert version >= (3, 8, 4)
+
+
+def testGenerateSelfSignedCertificate():
+    engine = ffl_gnutls.CryptoEngine()
+    certificatePEM, privateKeyPEM = engine.generateSelfSignedCertificate(
+        "ffl-gnutls test"
+    )
+    assert certificatePEM.startswith("-----BEGIN CERTIFICATE-----\n")
+    assert privateKeyPEM.startswith("-----BEGIN PRIVATE KEY-----\n")
+
+    with tempfile.TemporaryDirectory() as directory:
+        certificatePath = f"{directory}/certificate.pem"
+        privateKeyPath = f"{directory}/privateKey.pem"
+        with open(certificatePath, "w", encoding="ascii") as certificateFile:
+            certificateFile.write(certificatePEM)
+        with open(privateKeyPath, "w", encoding="ascii") as privateKeyFile:
+            privateKeyFile.write(privateKeyPEM)
+        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
+            certificatePath,
+            privateKeyPath,
+        )
 
 
 def testP384SignVerifyAndPublicDerivation():
